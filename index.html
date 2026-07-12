@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FGL Precificação Unificada</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.2/dist/umd/supabase.js"></script>
 <style>
 :root{
   --ink:#0F1923;--ink2:#2D3A45;--ink3:#5A6A76;--ink4:#9AAAB8;
@@ -236,6 +236,7 @@ header .hbtn:hover{border-color:rgba(255,255,255,.45);background:rgba(255,255,25
   </div>
   <div class="spacer"></div>
   <span id="save-status"></span>
+  <button class="hbtn" id="auth-status" onclick="onAuthButtonClick()">👤 Minha conta</button>
   <button class="hbtn" onclick="loadState(false)">↑ Carregar</button>
   <button class="hbtn" onclick="saveState()">↓ Salvar</button>
   <button class="dm-toggle" id="dm" onclick="toggleDark()">🌙</button>
@@ -326,6 +327,7 @@ header .hbtn:hover{border-color:rgba(255,255,255,.45);background:rgba(255,255,25
       <span style="font-size:.66rem;color:var(--ink3);font-weight:600" id="rv-sync-status">☁ Cotações/Pedidos compartilhados: não conectado</span>
       <div style="flex:1"></div>
       <button class="btn btn-s" style="font-size:.64rem;padding:.28rem .6rem" onclick="rvConnectShared()">🔗 Conectar dados compartilhados</button>
+      <button class="btn btn-s" style="font-size:.64rem;padding:.28rem .6rem" onclick="rvAddMember()">＋ Adicionar pessoa</button>
     </div>
 
     <div id="rvpane-calc" class="rv-pane active">
@@ -546,6 +548,27 @@ header .hbtn:hover{border-color:rgba(255,255,255,.45);background:rgba(255,255,25
 
       <div class="exp-total"><span>Total despesas destino</span><span class="mono" id="e-total">R$ 0,00</span></div>
       <div style="text-align:right;margin-top:.8rem"><button class="btn btn-p" onclick="closeM('exp')">Fechar</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- CONTA — SUPABASE AUTH (e-mail + senha) -->
+<div class="ovl" id="ovl-auth" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal" style="max-width:340px">
+    <div class="modal-b" style="text-align:center;padding-top:1.6rem">
+      <div style="font-size:2rem;margin-bottom:.4rem">👤</div>
+      <div class="sh" style="justify-content:center;margin-bottom:.3rem">Minha conta</div>
+      <p style="font-size:.74rem;color:var(--ink3);margin-bottom:.9rem">Necessária pra sincronizar Importação e Cotações/Pedidos entre dispositivos e com sua gerente. Não afeta o uso local do app.</p>
+      <input class="mono" id="auth-email" type="email" placeholder="seu@email.com" autocomplete="email"
+        style="width:100%;padding:.6rem;border-radius:8px;border:1.5px solid var(--bdr2);text-align:center;font-size:.88rem;background:var(--card);color:var(--ink);margin-bottom:.5rem">
+      <input class="mono" id="auth-pw" type="password" placeholder="Senha da conta" autocomplete="current-password"
+        style="width:100%;padding:.6rem;border-radius:8px;border:1.5px solid var(--bdr2);text-align:center;font-size:.88rem;background:var(--card);color:var(--ink)">
+      <div id="auth-err" style="color:var(--red);font-size:.7rem;margin-top:.4rem;min-height:1.2em"></div>
+      <div style="display:flex;gap:.5rem;margin-top:.6rem">
+        <button class="btn btn-p" style="flex:1" onclick="authSignIn()">Entrar</button>
+        <button class="btn btn-s" style="flex:1" onclick="authSignUp()">Criar conta</button>
+      </div>
+      <p style="font-size:.6rem;color:var(--ink4);margin-top:.7rem">Primeira vez? Use "Criar conta". Sua gerente faz o mesmo com o e-mail dela — depois você a adiciona no vault compartilhado.</p>
     </div>
   </div>
 </div>
@@ -949,35 +972,116 @@ function loadExample(){
 }
 
 /* ════════ CRIPTOGRAFIA (AES-256-GCM, chave derivada da senha por PBKDF2) ════════
-   A senha NUNCA é gravada em disco nem embutida no código — ela só existe em
-   memória (variável JS) enquanto a aba estiver aberta, e é usada como chave
-   para cifrar/decifrar os dados antes de gravar no localStorage. Mesmo que
-   alguém leia o código-fonte e remova a checagem de senha, os dados no
-   localStorage continuam sendo bytes cifrados — inúteis sem a senha certa. */
+   A senha do cofre NUNCA é gravada em disco nem embutida no código — só existe
+   em memória enquanto a aba estiver aberta. O envelope cifrado carrega consigo
+   os parâmetros usados (formatVersion/cryptoVersion/kdf/iterations/salt/iv),
+   pra permitir mudar esses parâmetros no futuro sem quebrar backups antigos. */
 function buf2b64(buf){let bin='';new Uint8Array(buf).forEach(b=>bin+=String.fromCharCode(b));return btoa(bin);}
 function b642buf(b64){const bin=atob(b64);const buf=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)buf[i]=bin.charCodeAt(i);return buf;}
-async function deriveKey(password,salt){
+const PBKDF2_ITER=100000;
+async function deriveKey(password,salt,iterations){
   const km=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),{name:'PBKDF2'},false,['deriveKey']);
-  return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:150000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
 async function encryptJSON(password,obj){
   const salt=crypto.getRandomValues(new Uint8Array(16));
   const iv=crypto.getRandomValues(new Uint8Array(12));
-  const key=await deriveKey(password,salt);
+  const key=await deriveKey(password,salt,PBKDF2_ITER);
   const pt=new TextEncoder().encode(JSON.stringify(obj));
   const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,pt);
-  return{v:1,salt:buf2b64(salt),iv:buf2b64(iv),data:buf2b64(ct)};
+  return{formatVersion:1,cryptoVersion:1,kdf:'PBKDF2-SHA256',iterations:PBKDF2_ITER,salt:buf2b64(salt),iv:buf2b64(iv),ciphertext:buf2b64(ct)};
 }
 async function decryptJSON(password,payload){
-  const salt=b642buf(payload.salt),iv=b642buf(payload.iv),ct=b642buf(payload.data);
-  const key=await deriveKey(password,salt);
+  const iterations=payload.iterations||PBKDF2_ITER;
+  const salt=b642buf(payload.salt),iv=b642buf(payload.iv),ct=b642buf(payload.ciphertext||payload.data);
+  const key=await deriveKey(password,salt,iterations);
   const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,ct); // lança erro se a senha estiver errada
   return JSON.parse(new TextDecoder().decode(pt));
 }
 
-/* ════════ SALVAR / CARREGAR (localStorage cifrado — ferramenta local) ════════ */
+/* ════════ SUPABASE (backend real: Auth + RLS + revisão) ════════ */
+const SUPA_URL='https://zytlxglrzjzcybxhhgso.supabase.co';
+const SUPA_KEY='sb_publishable_R059JG4GGKZa2aacg3ceHQ_v9vgLSzD';
+let _supa=null,_supaOK=false;
+try{if(window.supabase){_supa=window.supabase.createClient(SUPA_URL,SUPA_KEY,{auth:{persistSession:true,autoRefreshToken:true}});_supaOK=true;}}catch(e){console.warn('Supabase init falhou:',e);}
+function localTs(key){return localStorage.getItem(key+'_ts')||'';}
+function setLocalTs(key){localStorage.setItem(key+'_ts',new Date().toISOString());}
+
+/* ── CONTA (Supabase Auth — e-mail + senha, controla QUEM pode ler/escrever) ── */
+let authUser=null;      // {id,email} quando logado
+let _pendingTab=null;   // pra retomar o fluxo (Importação/Revenda) depois do login
+function updateAuthUI(){
+  const el=document.getElementById('auth-status');
+  if(el)el.textContent=authUser?('🟢 '+authUser.email):'👤 Minha conta';
+}
+async function initAuth(){
+  if(!_supaOK)return;
+  const{data:{session}}=await _supa.auth.getSession();
+  if(session)authUser={id:session.user.id,email:session.user.email};
+  updateAuthUI();
+  _supa.auth.onAuthStateChange((_evt,session)=>{
+    authUser=session?{id:session.user.id,email:session.user.email}:null;
+    updateAuthUI();
+  });
+}
+function openAuthModal(){
+  document.getElementById('auth-err').textContent='';
+  document.getElementById('ovl-auth').classList.add('open');
+  setTimeout(()=>{const el=document.getElementById('auth-email');if(el)el.focus();},50);
+}
+function onAuthButtonClick(){authUser?authSignOut():openAuthModal();}
+async function authSignIn(){
+  const email=document.getElementById('auth-email').value.trim();
+  const pw=document.getElementById('auth-pw').value;
+  if(!email||!pw){document.getElementById('auth-err').textContent='Preencha e-mail e senha.';return;}
+  document.getElementById('auth-err').style.color='';
+  document.getElementById('auth-err').textContent='Entrando…';
+  const{data,error}=await _supa.auth.signInWithPassword({email,password:pw});
+  if(error){document.getElementById('auth-err').style.color='var(--red)';document.getElementById('auth-err').textContent='Erro: '+error.message;return;}
+  authUser={id:data.user.id,email:data.user.email};
+  updateAuthUI();
+  document.getElementById('ovl-auth').classList.remove('open');
+  toastSave('Conectado ✓');
+  _resumePending();
+}
+async function authSignUp(){
+  const email=document.getElementById('auth-email').value.trim();
+  const pw=document.getElementById('auth-pw').value;
+  if(!email||!pw){document.getElementById('auth-err').textContent='Preencha e-mail e senha.';return;}
+  if(pw.length<6){document.getElementById('auth-err').textContent='Senha muito curta (mín. 6 caracteres).';return;}
+  document.getElementById('auth-err').style.color='';
+  document.getElementById('auth-err').textContent='Criando conta…';
+  const{data,error}=await _supa.auth.signUp({email,password:pw});
+  if(error){document.getElementById('auth-err').style.color='var(--red)';document.getElementById('auth-err').textContent='Erro: '+error.message;return;}
+  if(data.session){
+    authUser={id:data.user.id,email:data.user.email};
+    updateAuthUI();
+    document.getElementById('ovl-auth').classList.remove('open');
+    toastSave('Conta criada e conectada ✓');
+    _resumePending();
+  }else{
+    document.getElementById('auth-err').textContent='Conta criada — confirme o e-mail (verifique a caixa de entrada) e entre de novo.';
+  }
+}
+async function authSignOut(){
+  if(!confirm('Sair da conta ('+authUser.email+')?\nA Importação também tranca de novo.'))return;
+  await _supa.auth.signOut();
+  authUser=null;importPass=null;rvSyncPass=null;
+  updateAuthUI();
+  toastSave('Desconectado');
+}
+function _resumePending(){
+  const p=_pendingTab;_pendingTab=null;
+  if(p==='import')checkLock();
+  else if(p==='revenda-connect')rvConnectShared();
+}
+
+/* ════════ IMPORTAÇÃO: vault pessoal (Auth + revisão, sem sobrescrita silenciosa) ════════ */
 const SAVE_KEY='fgl_unif_import_v1';
 const SAVE_IDS=['fx','fxFrete','frete','modal','icmsAV','icmsTR','markup','pisSaida','cofinsSaida','repasse','margAlvo','fyMarg','precoVenda'];
+const IMPORT_VAULT_ID='import';
+let _importRevision=0;
+let _importSyncTimer=null;
 function collectState(){
   const fields={};
   SAVE_IDS.forEach(id=>{const el=document.getElementById(id);if(el)fields[id]=el.value;});
@@ -992,34 +1096,62 @@ function applyState(state){
   if(typeof state.oemInFob==='boolean')document.getElementById('oemInFob').checked=state.oemInFob;
   _mode=state.mode||'cost';
 }
+async function importCloudGet(){
+  if(!_supaOK||!authUser)return null;
+  try{
+    const{data,error}=await _supa.from('precificacao_vault').select('blob,revision,updated_at')
+      .eq('user_id',authUser.id).eq('id',IMPORT_VAULT_ID).maybeSingle();
+    if(error){console.warn('importCloudGet:',error.message);return null;}
+    return data;
+  }catch(e){console.warn(e);return null;}
+}
+async function importCloudSave(blobStr){
+  if(!_supaOK||!authUser)return{ok:false,reason:'no-auth'};
+  try{
+    if(_importRevision===0){
+      const{error}=await _supa.from('precificacao_vault').insert({user_id:authUser.id,id:IMPORT_VAULT_ID,blob:blobStr,revision:1});
+      if(error){if(error.code==='23505')return{ok:false,reason:'conflict'};console.warn(error.message);return{ok:false,reason:'error'};}
+      _importRevision=1;return{ok:true};
+    }
+    const nextRev=_importRevision+1;
+    const{data,error}=await _supa.from('precificacao_vault')
+      .update({blob:blobStr,revision:nextRev,updated_at:new Date().toISOString()})
+      .eq('user_id',authUser.id).eq('id',IMPORT_VAULT_ID).eq('revision',_importRevision).select();
+    if(error){console.warn(error.message);return{ok:false,reason:'error'};}
+    if(!data||data.length===0)return{ok:false,reason:'conflict'};
+    _importRevision=nextRev;return{ok:true};
+  }catch(e){console.warn(e);return{ok:false,reason:'error'};}
+}
 async function saveState(){
   if(!importPass){toastSave('Desbloqueie a Importação primeiro');return;}
   const payload=await encryptJSON(importPass,collectState());
   const payloadStr=JSON.stringify(payload);
   localStorage.setItem(SAVE_KEY,payloadStr);
   setLocalTs(SAVE_KEY);
+  if(!authUser){toastSave('Salvo local (sem conta conectada)');return;}
   toastSave('☁ Salvando…');
   clearTimeout(_importSyncTimer);
   _importSyncTimer=setTimeout(async()=>{
-    const ok=await cloudSet(CLOUD_ROW_IMPORT,payloadStr);
-    toastSave(ok?'Salvo, cifrado e sincronizado ✓':'Salvo local — falha ao sincronizar');
+    const r=await importCloudSave(payloadStr);
+    if(r.ok)toastSave('Salvo, cifrado e sincronizado ✓');
+    else if(r.reason==='conflict'){
+      toastSave('⚠ Conflito de versão');
+      alert('Outra máquina (ou aba) salvou uma versão mais nova enquanto você editava.\n\nClique "↑ Carregar" pra trazer a versão mais recente antes de salvar de novo — senão você sobrescreve o que foi salvo lá.');
+    }else toastSave('Salvo local — falha ao sincronizar');
   },1200);
 }
 async function loadState(silent){
   if(!importPass){if(!silent)toastSave('Desbloqueie a Importação primeiro');return;}
-  let raw=localStorage.getItem(SAVE_KEY);
-  const cloud=await cloudGet(CLOUD_ROW_IMPORT);
-  let fromCloud=false;
-  if(cloud&&cloud.blob){
-    const cloudTs=cloud.updated_at||'';
-    if(cloudTs>=localTs(SAVE_KEY)){raw=cloud.blob;fromCloud=true;}
+  let raw=localStorage.getItem(SAVE_KEY),fromCloud=false;
+  if(authUser){
+    const cloud=await importCloudGet();
+    if(cloud&&cloud.blob){_importRevision=cloud.revision||1;raw=cloud.blob;fromCloud=true;}
   }
   if(!raw){if(!silent)toastSave('Nada salvo ainda');return;}
   try{
     const payload=JSON.parse(raw);
     const state=await decryptJSON(importPass,payload);
-    applyState(state);
-    recalc();
+    applyState(state);recalc();
     if(fromCloud){localStorage.setItem(SAVE_KEY,raw);setLocalTs(SAVE_KEY);}
     if(!silent)toastSave(fromCloud?'Carregado da nuvem ✓':'Carregado ✓ (local)');
   }catch(e){
@@ -1031,7 +1163,7 @@ function toastSave(msg){
   const el=document.getElementById('save-status');
   if(!el)return;
   el.textContent=msg;
-  setTimeout(()=>{if(el.textContent===msg)el.textContent='';},2200);
+  setTimeout(()=>{if(el.textContent===msg)el.textContent='';},2600);
 }
 
 /* ════════ ABAS ════════ */
@@ -1043,14 +1175,20 @@ function showTab(id){
   if(id==='import'){checkLock();}else{document.getElementById('ovl-lock').classList.remove('open');}
 }
 
-/* ════════ SENHA — ABA IMPORTAÇÃO (só existe em memória, nunca em disco) ════════ */
+/* ════════ SENHA DO COFRE — ABA IMPORTAÇÃO ════════ */
 let importPass=null; // fica null até o usuário digitar certo nesta sessão da aba
 function checkLock(){
+  if(!authUser){
+    document.getElementById('ovl-lock').classList.remove('open');
+    _pendingTab='import';
+    openAuthModal();
+    return;
+  }
   if(importPass){document.getElementById('ovl-lock').classList.remove('open');return;}
-  const hasData=!!localStorage.getItem(SAVE_KEY);
-  document.getElementById('lock-hint').textContent=hasData
-    ? 'Acesso restrito. Digite a senha para descriptografar os dados.'
-    : 'Primeiro acesso: a senha que você digitar agora vira a senha de criptografia dos dados salvos.';
+  const hasLocal=!!localStorage.getItem(SAVE_KEY);
+  document.getElementById('lock-hint').textContent=hasLocal
+    ? 'Conta conectada. Digite a senha do cofre pra decifrar os dados.'
+    : 'Conta conectada, primeiro acesso: a senha que você digitar agora vira a senha do cofre.';
   document.getElementById('ovl-lock').classList.add('open');
   setTimeout(()=>{const el=document.getElementById('lock-pass');if(el)el.focus();},50);
 }
@@ -1060,37 +1198,35 @@ async function tryUnlock(){
   document.getElementById('lock-err').style.color='';
   document.getElementById('lock-err').textContent='Conectando à nuvem…';
   const localRaw=localStorage.getItem(SAVE_KEY);
-  const cloud=await cloudGet(CLOUD_ROW_IMPORT);
+  const cloud=await importCloudGet();
   let vaultToUse=null,fromCloud=false;
   if(cloud&&cloud.blob){
+    _importRevision=cloud.revision||1;
     if(!localRaw){vaultToUse=cloud.blob;fromCloud=true;}
     else{
       const cloudTs=cloud.updated_at||'';
       fromCloud=cloudTs>=localTs(SAVE_KEY);
       vaultToUse=fromCloud?cloud.blob:localRaw;
     }
-  }else if(localRaw){vaultToUse=localRaw;}
+  }else if(localRaw){vaultToUse=localRaw;_importRevision=0;}
   document.getElementById('lock-err').textContent='';
 
   if(vaultToUse){
     try{
       const payload=JSON.parse(vaultToUse);
-      const state=await decryptJSON(v,payload); // valida a senha de verdade (nuvem ou local)
+      const state=await decryptJSON(v,payload); // valida a senha de verdade
       importPass=v;
-      applyState(state);
-      recalc();
+      applyState(state);recalc();
       if(fromCloud){localStorage.setItem(SAVE_KEY,vaultToUse);setLocalTs(SAVE_KEY);}
-      else if(_supaOK){cloudSet(CLOUD_ROW_IMPORT,vaultToUse);} // local estava à frente — empurra pra nuvem
+      else if(_supaOK&&authUser){await importCloudSave(vaultToUse);}
       unlockUI();
     }catch(e){
       document.getElementById('lock-err').style.color='var(--red)';
       document.getElementById('lock-err').textContent='Senha incorreta.';
-      document.getElementById('lock-pass').value='';
-      document.getElementById('lock-pass').focus();
+      document.getElementById('lock-pass').value='';document.getElementById('lock-pass').focus();
     }
   }else{
-    // primeiro uso — nada pra validar; essa senha vira a chave de criptografia dali pra frente
-    importPass=v;
+    importPass=v;_importRevision=0;
     unlockUI();
   }
 }
@@ -1100,58 +1236,11 @@ function unlockUI(){
   document.getElementById('lock-pass').value='';
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   SUPABASE (sincronização na nuvem — igual ao FGL Tracker)
-   — Mesmo projeto do Tracker, linhas diferentes na tabela 'vault' pra
-     não misturar dados (id='fgl_precificacao_import' / '..._revenda').
-   — Não tem OAuth, não tem "conectar conta" — a chave publicável do
-     Supabase é segura de expor no cliente (é só um endpoint de API,
-     protegido por regras no servidor). O que protege o CONTEÚDO é a
-     senha, usada como chave de criptografia — o Supabase só guarda
-     bytes cifrados, nunca vê os dados em claro.
-   — Conflito resolvido por timestamp: ao desbloquear/conectar, compara
-     o 'updated_at' da nuvem com o horário salvo localmente — usa o
-     mais recente como fonte da verdade (evita sobrescrever com dado
-     velho vindo de outra máquina).
-   ═══════════════════════════════════════════════════════════════ */
-const SUPA_URL='https://zytlxglrzjzcybxhhgso.supabase.co';
-const SUPA_KEY='sb_publishable_R059JG4GGKZa2aacg3ceHQ_v9vgLSzD';
-let _supa=null,_supaOK=false;
-try{if(window.supabase){_supa=window.supabase.createClient(SUPA_URL,SUPA_KEY);_supaOK=true;}}catch(e){console.warn('Supabase init falhou:',e);}
-
-async function cloudGet(rowId){
-  if(!_supaOK)return null;
-  try{
-    const{data,error}=await _supa.from('vault').select('blob,updated_at').eq('id',rowId).maybeSingle();
-    if(error){console.warn('cloudGet error:',error.message);return null;}
-    return data||null;
-  }catch(e){console.warn('cloudGet falhou:',e);return null;}
-}
-async function cloudSet(rowId,blob){
-  if(!_supaOK)return false;
-  try{
-    const{error}=await _supa.from('vault').upsert({id:rowId,blob,updated_at:new Date().toISOString()});
-    if(error){console.warn('cloudSet error:',error.message);return false;}
-    return true;
-  }catch(e){console.warn('cloudSet falhou:',e);return false;}
-}
-
-/* ── IMPORTAÇÃO: fluxo de senha agora checa nuvem × local por timestamp ── */
-const CLOUD_ROW_IMPORT='fgl_precificacao_import';
-let _importSyncTimer=null;
-function localTs(key){return localStorage.getItem(key+'_ts')||'';}
-function setLocalTs(key){localStorage.setItem(key+'_ts',new Date().toISOString());}
-
-/* ═══════════════════════════════════════════════════════════════
-   REVENDA: dados compartilhados (Cotações + Pedidos), senha própria
-   — Diferente da Importação (senha só sua), aqui a senha é combinada
-     com quem mais precisa ver esses dados (ex: sua gerente). Continua
-     sem barreira nenhuma pra usar a calculadora localmente — conectar
-     é opcional, só necessário se quiser sincronizar com outra pessoa.
-   ═══════════════════════════════════════════════════════════════ */
-const CLOUD_ROW_REVENDA='fgl_precificacao_revenda';
+/* ════════ REVENDA: vault compartilhado (Auth + membros + revisão) ════════ */
+const SHARED_VAULT_ID='revenda';
 let rvSyncPass=null;
 let _rvSyncTimer=null;
+let _rvRevision=0;
 
 function rvCollectSyncData(){return{cotacoes:rvLoadCotacoes(),pedidos:rvLoadPedidos()};}
 function rvApplySyncData(data){
@@ -1162,49 +1251,68 @@ function rvApplySyncData(data){
 function updateRvSyncStatus(msg){
   const el=document.getElementById('rv-sync-status');
   if(!el)return;
-  el.textContent=msg||(rvSyncPass?'☁ Cotações/Pedidos compartilhados: conectado ✓ (sincroniza sozinho)':'☁ Cotações/Pedidos compartilhados: não conectado');
+  if(msg){el.textContent=msg;return;}
+  if(!authUser){el.textContent='☁ Cotações/Pedidos compartilhados: entre com sua conta primeiro';return;}
+  el.textContent=rvSyncPass?'☁ Cotações/Pedidos compartilhados: conectado ✓ (sincroniza sozinho)':'☁ Cotações/Pedidos compartilhados: não conectado';
 }
-
+async function rvCloudGet(){
+  if(!_supaOK||!authUser)return null;
+  try{
+    const{data,error}=await _supa.from('precificacao_shared_vault').select('blob,revision,updated_at').eq('id',SHARED_VAULT_ID).maybeSingle();
+    if(error){console.warn('rvCloudGet:',error.message);return null;}
+    return data;
+  }catch(e){console.warn(e);return null;}
+}
+async function rvCloudSave(blobStr){
+  if(!_supaOK||!authUser)return{ok:false,reason:'no-auth'};
+  try{
+    const nextRev=_rvRevision+1;
+    const{data,error}=await _supa.from('precificacao_shared_vault')
+      .update({blob:blobStr,revision:nextRev,updated_at:new Date().toISOString()})
+      .eq('id',SHARED_VAULT_ID).eq('revision',_rvRevision).select();
+    if(error){console.warn(error.message);return{ok:false,reason:'error'};}
+    if(!data||data.length===0)return{ok:false,reason:'conflict'};
+    _rvRevision=nextRev;return{ok:true};
+  }catch(e){console.warn(e);return{ok:false,reason:'error'};}
+}
 async function rvConnectShared(){
-  const pw=prompt('Senha compartilhada de Cotações/Pedidos\n(a mesma que sua gerente vai usar — pode ser diferente da senha da Importação)');
+  if(!authUser){_pendingTab='revenda-connect';openAuthModal();return;}
+  const pw=prompt('Senha do cofre compartilhado de Cotações/Pedidos\n(a mesma que sua gerente vai digitar — pode ser diferente da senha da sua conta)');
   if(!pw)return;
   updateRvSyncStatus('☁ Conectando…');
   try{
+    const cloud=await rvCloudGet();
+    if(!cloud){
+      // ninguém criou ainda — cria agora e você já vira o 1º membro
+      const payload=await encryptJSON(pw,rvCollectSyncData());
+      const payloadStr=JSON.stringify(payload);
+      const{error}=await _supa.rpc('pv_create_shared',{p_id:SHARED_VAULT_ID,p_blob:payloadStr});
+      if(error){updateRvSyncStatus();alert('Erro ao criar vault compartilhado: '+error.message);return;}
+      rvSyncPass=pw;_rvRevision=1;
+      localStorage.setItem('rv_sync_vault',payloadStr);setLocalTs('rv_sync_vault');
+      updateRvSyncStatus();toastSave('Vault compartilhado criado ✓ — use "＋ Adicionar pessoa" pra convidar');
+      return;
+    }
     const localRaw=localStorage.getItem('rv_sync_vault');
     const localTsV=localTs('rv_sync_vault');
-    const cloud=await cloudGet(CLOUD_ROW_REVENDA);
-    let vaultToUse=null,source='';
-    if(cloud&&cloud.blob){
-      if(!localRaw){vaultToUse=cloud.blob;source='cloud';}
-      else{
-        const cloudTs=cloud.updated_at||'';
-        vaultToUse=(cloudTs>=localTsV)?cloud.blob:localRaw;
-        source=(cloudTs>=localTsV)?'cloud':'local';
-      }
-    }else if(localRaw){vaultToUse=localRaw;source='local';}
-
-    if(vaultToUse){
-      const payload=JSON.parse(vaultToUse);
-      const data=await decryptJSON(pw,payload);
-      rvSyncPass=pw;
-      rvApplySyncData(data);
-      if(source==='cloud'){localStorage.setItem('rv_sync_vault',vaultToUse);setLocalTs('rv_sync_vault');}
-      if(source==='local'){cloudSet(CLOUD_ROW_REVENDA,vaultToUse);}
-    }else{
-      rvSyncPass=pw;
-    }
+    let vaultToUse=cloud.blob,fromCloud=true;
+    if(localRaw&&localTsV>(cloud.updated_at||'')){vaultToUse=localRaw;fromCloud=false;}
+    const payload=JSON.parse(vaultToUse);
+    const data=await decryptJSON(pw,payload); // senha errada OU sem permissão (RLS) cai no catch
+    rvSyncPass=pw;_rvRevision=cloud.revision||1;
+    rvApplySyncData(data);
+    if(fromCloud){localStorage.setItem('rv_sync_vault',vaultToUse);setLocalTs('rv_sync_vault');}
+    else{await rvCloudSave(vaultToUse);}
     updateRvSyncStatus();
     toastSave('Dados compartilhados conectados ✓');
-    rvSyncPush();
   }catch(e){
     console.warn(e);
     updateRvSyncStatus();
-    alert('Senha incorreta pros dados compartilhados existentes.');
+    alert('Não deu pra conectar — ou a senha do cofre está errada, ou você ainda não foi adicionado(a) como membro (peça pra quem criou o vault te adicionar pelo seu e-mail, em "＋ Adicionar pessoa").');
   }
 }
-
 async function rvSyncPush(){
-  if(!rvSyncPass)return;
+  if(!rvSyncPass||!authUser)return;
   const payload=await encryptJSON(rvSyncPass,rvCollectSyncData());
   const payloadStr=JSON.stringify(payload);
   localStorage.setItem('rv_sync_vault',payloadStr);
@@ -1212,11 +1320,22 @@ async function rvSyncPush(){
   updateRvSyncStatus('☁ Salvando…');
   clearTimeout(_rvSyncTimer);
   _rvSyncTimer=setTimeout(async()=>{
-    const ok=await cloudSet(CLOUD_ROW_REVENDA,payloadStr);
-    updateRvSyncStatus(ok?null:'⚠ Cotações/Pedidos: só local (falha ao sincronizar)');
+    const r=await rvCloudSave(payloadStr);
+    if(r.ok)updateRvSyncStatus();
+    else if(r.reason==='conflict')updateRvSyncStatus('⚠ Conflito — clique "Conectar" de novo pra atualizar');
+    else updateRvSyncStatus('⚠ Cotações/Pedidos: só local (falha ao sincronizar)');
   },1200);
 }
-
+async function rvAddMember(){
+  if(!authUser){toastSave('Entre com sua conta primeiro');return;}
+  if(!rvSyncPass){toastSave('Conecte os dados compartilhados primeiro');return;}
+  const email=prompt('E-mail da pessoa a adicionar\n(ela precisa já ter criado conta no app pelo menos uma vez — botão "Minha conta")');
+  if(!email)return;
+  const{data,error}=await _supa.rpc('pv_add_member',{p_id:SHARED_VAULT_ID,p_email:email.trim()});
+  if(error){alert('Erro: '+error.message);return;}
+  if(data==='not_found'){alert('Essa pessoa ainda não tem conta — peça pra ela abrir o app, clicar em "👤 Minha conta" e criar login com esse e-mail primeiro. Depois tenta de novo.');return;}
+  alert('Adicionado(a) ✓ — agora essa pessoa pode clicar "🔗 Conectar dados compartilhados" e usar a mesma senha do cofre.');
+}
 /* ════════ UI ════════ */
 function toggleCollap(h,id){h.classList.toggle('open');document.getElementById(id).classList.toggle('open');}
 function closeM(id){document.getElementById('ovl-'+id).classList.remove('open');}
@@ -1817,6 +1936,7 @@ function rvInit(){
 addProd({ncm:'4202.92.00'});
 recalc();
 rvInit();
+initAuth().then(()=>updateRvSyncStatus());
 // obs: os dados da Importação ficam cifrados no localStorage; só são carregados
 // quando o usuário desbloqueia a aba com a senha certa (dentro de tryUnlock)
 </script>
