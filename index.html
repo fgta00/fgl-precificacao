@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FGL Precificação Unificada</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{
   --ink:#0F1923;--ink2:#2D3A45;--ink3:#5A6A76;--ink4:#9AAAB8;
@@ -236,8 +236,6 @@ header .hbtn:hover{border-color:rgba(255,255,255,.45);background:rgba(255,255,25
   </div>
   <div class="spacer"></div>
   <span id="save-status"></span>
-  <span id="drive-status" class="mono" style="font-size:.64rem;color:rgba(255,255,255,.5);white-space:nowrap"></span>
-  <button class="hbtn" id="btn-drive" onclick="onDriveButtonClick()">🔗 Drive</button>
   <button class="hbtn" onclick="loadState(false)">↑ Carregar</button>
   <button class="hbtn" onclick="saveState()">↓ Salvar</button>
   <button class="dm-toggle" id="dm" onclick="toggleDark()">🌙</button>
@@ -322,6 +320,12 @@ header .hbtn:hover{border-color:rgba(255,255,255,.45);background:rgba(255,255,25
       <button class="rv-tab active" id="rvtab-calc" onclick="rvShowTab('calc')">⚙️ Calculadora</button>
       <button class="rv-tab" id="rvtab-cotacoes" onclick="rvShowTab('cotacoes')">📋 Cotações</button>
       <button class="rv-tab" id="rvtab-pedidos" onclick="rvShowTab('pedidos')">📦 Pedidos</button>
+    </div>
+
+    <div class="card no-print" style="padding:.6rem .9rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem">
+      <span style="font-size:.66rem;color:var(--ink3);font-weight:600" id="rv-sync-status">☁ Cotações/Pedidos compartilhados: não conectado</span>
+      <div style="flex:1"></div>
+      <button class="btn btn-s" style="font-size:.64rem;padding:.28rem .6rem" onclick="rvConnectShared()">🔗 Conectar dados compartilhados</button>
     </div>
 
     <div id="rvpane-calc" class="rv-pane active">
@@ -993,27 +997,22 @@ async function saveState(){
   const payload=await encryptJSON(importPass,collectState());
   const payloadStr=JSON.stringify(payload);
   localStorage.setItem(SAVE_KEY,payloadStr);
-  if(gDriveToken){
-    toastSave('Salvando e sincronizando…');
-    try{
-      await driveUpload(payloadStr);
-      toastSave('Salvo, cifrado e sincronizado ✓');
-    }catch(e){
-      console.warn('Falha ao sincronizar com o Drive:',e);
-      toastSave('Salvo local — falha ao sincronizar');
-    }
-  }else{
-    toastSave('Salvo e cifrado ✓ (local)');
-  }
+  setLocalTs(SAVE_KEY);
+  toastSave('☁ Salvando…');
+  clearTimeout(_importSyncTimer);
+  _importSyncTimer=setTimeout(async()=>{
+    const ok=await cloudSet(CLOUD_ROW_IMPORT,payloadStr);
+    toastSave(ok?'Salvo, cifrado e sincronizado ✓':'Salvo local — falha ao sincronizar');
+  },1200);
 }
 async function loadState(silent){
   if(!importPass){if(!silent)toastSave('Desbloqueie a Importação primeiro');return;}
   let raw=localStorage.getItem(SAVE_KEY);
-  if(gDriveToken){
-    try{
-      const remote=await driveDownload();
-      if(remote){raw=remote;localStorage.setItem(SAVE_KEY,remote);}
-    }catch(e){console.warn('Falha ao baixar do Drive, usando cópia local:',e);}
+  const cloud=await cloudGet(CLOUD_ROW_IMPORT);
+  let fromCloud=false;
+  if(cloud&&cloud.blob){
+    const cloudTs=cloud.updated_at||'';
+    if(cloudTs>=localTs(SAVE_KEY)){raw=cloud.blob;fromCloud=true;}
   }
   if(!raw){if(!silent)toastSave('Nada salvo ainda');return;}
   try{
@@ -1021,7 +1020,8 @@ async function loadState(silent){
     const state=await decryptJSON(importPass,payload);
     applyState(state);
     recalc();
-    if(!silent)toastSave(gDriveToken?'Carregado do Drive ✓':'Carregado ✓ (local)');
+    if(fromCloud){localStorage.setItem(SAVE_KEY,raw);setLocalTs(SAVE_KEY);}
+    if(!silent)toastSave(fromCloud?'Carregado da nuvem ✓':'Carregado ✓ (local)');
   }catch(e){
     if(!silent)toastSave('Falha ao decifrar');
     console.warn('Falha ao carregar estado salvo (senha errada ou dado corrompido):',e);
@@ -1057,27 +1057,41 @@ function checkLock(){
 async function tryUnlock(){
   const v=document.getElementById('lock-pass').value;
   if(!v){document.getElementById('lock-err').textContent='Digite uma senha.';return;}
-  const raw=localStorage.getItem(SAVE_KEY);
-  if(raw){
-    // já existe dado salvo — só sabemos se a senha está certa tentando decifrar de verdade
+  document.getElementById('lock-err').style.color='';
+  document.getElementById('lock-err').textContent='Conectando à nuvem…';
+  const localRaw=localStorage.getItem(SAVE_KEY);
+  const cloud=await cloudGet(CLOUD_ROW_IMPORT);
+  let vaultToUse=null,fromCloud=false;
+  if(cloud&&cloud.blob){
+    if(!localRaw){vaultToUse=cloud.blob;fromCloud=true;}
+    else{
+      const cloudTs=cloud.updated_at||'';
+      fromCloud=cloudTs>=localTs(SAVE_KEY);
+      vaultToUse=fromCloud?cloud.blob:localRaw;
+    }
+  }else if(localRaw){vaultToUse=localRaw;}
+  document.getElementById('lock-err').textContent='';
+
+  if(vaultToUse){
     try{
-      const payload=JSON.parse(raw);
-      const state=await decryptJSON(v,payload);
+      const payload=JSON.parse(vaultToUse);
+      const state=await decryptJSON(v,payload); // valida a senha de verdade (nuvem ou local)
       importPass=v;
       applyState(state);
       recalc();
+      if(fromCloud){localStorage.setItem(SAVE_KEY,vaultToUse);setLocalTs(SAVE_KEY);}
+      else if(_supaOK){cloudSet(CLOUD_ROW_IMPORT,vaultToUse);} // local estava à frente — empurra pra nuvem
       unlockUI();
-      if(gDriveToken)loadState(true); // se já conectado ao Drive, puxa a versão mais recente
     }catch(e){
+      document.getElementById('lock-err').style.color='var(--red)';
       document.getElementById('lock-err').textContent='Senha incorreta.';
       document.getElementById('lock-pass').value='';
       document.getElementById('lock-pass').focus();
     }
   }else{
-    // primeiro uso local — mas pode já existir uma versão no Drive de outra máquina
+    // primeiro uso — nada pra validar; essa senha vira a chave de criptografia dali pra frente
     importPass=v;
     unlockUI();
-    if(gDriveToken)loadState(true);
   }
 }
 function unlockUI(){
@@ -1087,98 +1101,120 @@ function unlockUI(){
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   SINCRONIZAÇÃO GOOGLE DRIVE (igual ao FGL Tracker)
-   — O ARQUIVO QUE FICA NO DRIVE É O MESMO BLOB CIFRADO do localStorage
-     (salt+iv+ciphertext em base64) — o Google nunca vê os dados em claro.
-   — Escopo 'drive.file': o app só enxerga os arquivos que ELE MESMO criou,
-     e o arquivo fica visível no Drive normal do usuário (não escondido).
-   — Só funciona servido via http(s) (ex: GitHub Pages). Não funciona
-     abrindo o HTML direto como arquivo local (file://) — o Google não
-     aceita esse tipo de origem no OAuth.
+   SUPABASE (sincronização na nuvem — igual ao FGL Tracker)
+   — Mesmo projeto do Tracker, linhas diferentes na tabela 'vault' pra
+     não misturar dados (id='fgl_precificacao_import' / '..._revenda').
+   — Não tem OAuth, não tem "conectar conta" — a chave publicável do
+     Supabase é segura de expor no cliente (é só um endpoint de API,
+     protegido por regras no servidor). O que protege o CONTEÚDO é a
+     senha, usada como chave de criptografia — o Supabase só guarda
+     bytes cifrados, nunca vê os dados em claro.
+   — Conflito resolvido por timestamp: ao desbloquear/conectar, compara
+     o 'updated_at' da nuvem com o horário salvo localmente — usa o
+     mais recente como fonte da verdade (evita sobrescrever com dado
+     velho vindo de outra máquina).
    ═══════════════════════════════════════════════════════════════ */
-const GOOGLE_CLIENT_ID='696181362065-i6ktbnctvafdac879ml8s7lkcp7jgvr0.apps.googleusercontent.com'; // <- mesmo Client ID do FGL Tracker
-const DRIVE_SCOPE='https://www.googleapis.com/auth/drive.file';
-const DRIVE_FILE_NAME='fgl_precificacao_import.enc';
-let gDriveToken=null;
-let gTokenClient=null;
-let gDriveFileId=null;
+const SUPA_URL='https://zytlxglrzjzcybxhhgso.supabase.co';
+const SUPA_KEY='sb_publishable_R059JG4GGKZa2aacg3ceHQ_v9vgLSzD';
+let _supa=null,_supaOK=false;
+try{if(window.supabase){_supa=window.supabase.createClient(SUPA_URL,SUPA_KEY);_supaOK=true;}}catch(e){console.warn('Supabase init falhou:',e);}
 
-function driveStatusEl(){return document.getElementById('drive-status');}
-function setDriveStatus(msg,color){const el=driveStatusEl();if(el){el.textContent=msg;el.style.color=color||'rgba(255,255,255,.5)';}}
+async function cloudGet(rowId){
+  if(!_supaOK)return null;
+  try{
+    const{data,error}=await _supa.from('vault').select('blob,updated_at').eq('id',rowId).maybeSingle();
+    if(error){console.warn('cloudGet error:',error.message);return null;}
+    return data||null;
+  }catch(e){console.warn('cloudGet falhou:',e);return null;}
+}
+async function cloudSet(rowId,blob){
+  if(!_supaOK)return false;
+  try{
+    const{error}=await _supa.from('vault').upsert({id:rowId,blob,updated_at:new Date().toISOString()});
+    if(error){console.warn('cloudSet error:',error.message);return false;}
+    return true;
+  }catch(e){console.warn('cloudSet falhou:',e);return false;}
+}
 
-function initGoogleAuth(){
-  if(GOOGLE_CLIENT_ID.startsWith('COLE_AQUI')){
-    setDriveStatus('Client ID não configurado','rgba(255,180,120,.85)');
-    return;
-  }
-  if(!window.google||!google.accounts||!google.accounts.oauth2){
-    // GIS ainda não carregou (script externo, async) — tenta de novo em breve
-    setTimeout(initGoogleAuth,300);
-    return;
-  }
-  gTokenClient=google.accounts.oauth2.initTokenClient({
-    client_id:GOOGLE_CLIENT_ID,
-    scope:DRIVE_SCOPE,
-    callback:async(resp)=>{
-      if(resp.error){setDriveStatus('Falha ao conectar','rgba(255,140,140,.9)');return;}
-      gDriveToken=resp.access_token;
-      setDriveStatus('🟢 Drive conectado','#8FE3A8');
-      const btn=document.getElementById('btn-drive');if(btn)btn.textContent='⇅ Sincronizar';
-      // se a Importação já estiver desbloqueada, sincroniza na hora
-      if(importPass)loadState(true);
+/* ── IMPORTAÇÃO: fluxo de senha agora checa nuvem × local por timestamp ── */
+const CLOUD_ROW_IMPORT='fgl_precificacao_import';
+let _importSyncTimer=null;
+function localTs(key){return localStorage.getItem(key+'_ts')||'';}
+function setLocalTs(key){localStorage.setItem(key+'_ts',new Date().toISOString());}
+
+/* ═══════════════════════════════════════════════════════════════
+   REVENDA: dados compartilhados (Cotações + Pedidos), senha própria
+   — Diferente da Importação (senha só sua), aqui a senha é combinada
+     com quem mais precisa ver esses dados (ex: sua gerente). Continua
+     sem barreira nenhuma pra usar a calculadora localmente — conectar
+     é opcional, só necessário se quiser sincronizar com outra pessoa.
+   ═══════════════════════════════════════════════════════════════ */
+const CLOUD_ROW_REVENDA='fgl_precificacao_revenda';
+let rvSyncPass=null;
+let _rvSyncTimer=null;
+
+function rvCollectSyncData(){return{cotacoes:rvLoadCotacoes(),pedidos:rvLoadPedidos()};}
+function rvApplySyncData(data){
+  if(Array.isArray(data.cotacoes))rvSaveCotacoes(data.cotacoes);
+  if(Array.isArray(data.pedidos))rvSavePedidos(data.pedidos);
+  rvRenderCotacoes();rvRenderPedidos();
+}
+function updateRvSyncStatus(msg){
+  const el=document.getElementById('rv-sync-status');
+  if(!el)return;
+  el.textContent=msg||(rvSyncPass?'☁ Cotações/Pedidos compartilhados: conectado ✓ (sincroniza sozinho)':'☁ Cotações/Pedidos compartilhados: não conectado');
+}
+
+async function rvConnectShared(){
+  const pw=prompt('Senha compartilhada de Cotações/Pedidos\n(a mesma que sua gerente vai usar — pode ser diferente da senha da Importação)');
+  if(!pw)return;
+  updateRvSyncStatus('☁ Conectando…');
+  try{
+    const localRaw=localStorage.getItem('rv_sync_vault');
+    const localTsV=localTs('rv_sync_vault');
+    const cloud=await cloudGet(CLOUD_ROW_REVENDA);
+    let vaultToUse=null,source='';
+    if(cloud&&cloud.blob){
+      if(!localRaw){vaultToUse=cloud.blob;source='cloud';}
+      else{
+        const cloudTs=cloud.updated_at||'';
+        vaultToUse=(cloudTs>=localTsV)?cloud.blob:localRaw;
+        source=(cloudTs>=localTsV)?'cloud':'local';
+      }
+    }else if(localRaw){vaultToUse=localRaw;source='local';}
+
+    if(vaultToUse){
+      const payload=JSON.parse(vaultToUse);
+      const data=await decryptJSON(pw,payload);
+      rvSyncPass=pw;
+      rvApplySyncData(data);
+      if(source==='cloud'){localStorage.setItem('rv_sync_vault',vaultToUse);setLocalTs('rv_sync_vault');}
+      if(source==='local'){cloudSet(CLOUD_ROW_REVENDA,vaultToUse);}
+    }else{
+      rvSyncPass=pw;
     }
-  });
-  setDriveStatus('Drive: desconectado','rgba(255,255,255,.5)');
-}
-function onDriveButtonClick(){
-  if(!gTokenClient){toastSave('Google Drive ainda carregando…');initGoogleAuth();return;}
-  if(gDriveToken){
-    // já conectado — botão vira "sincronizar agora"
-    if(!importPass){toastSave('Desbloqueie a Importação primeiro');return;}
-    loadState(false);
-    return;
+    updateRvSyncStatus();
+    toastSave('Dados compartilhados conectados ✓');
+    rvSyncPush();
+  }catch(e){
+    console.warn(e);
+    updateRvSyncStatus();
+    alert('Senha incorreta pros dados compartilhados existentes.');
   }
-  gTokenClient.requestAccessToken({prompt:'consent'});
 }
 
-/* ── Drive API (REST direta via fetch, sem SDK) ── */
-async function driveFindFile(){
-  const q=encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false`);
-  const res=await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&spaces=drive`,{
-    headers:{Authorization:`Bearer ${gDriveToken}`}
-  });
-  if(!res.ok)throw new Error('Drive list falhou: '+res.status);
-  const data=await res.json();
-  return(data.files&&data.files.length)?data.files[0]:null;
-}
-async function driveUpload(payloadStr){
-  const existing=gDriveFileId?{id:gDriveFileId}:await driveFindFile();
-  const boundary='fgl_bd_'+Date.now();
-  const metadata=existing?{name:DRIVE_FILE_NAME}:{name:DRIVE_FILE_NAME,mimeType:'application/json'};
-  const body=`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`+
-             `--${boundary}\r\nContent-Type: application/json\r\n\r\n${payloadStr}\r\n--${boundary}--`;
-  const url=existing
-    ?`https://www.googleapis.com/upload/drive/v3/files/${existing.id}?uploadType=multipart`
-    :`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
-  const res=await fetch(url,{
-    method:existing?'PATCH':'POST',
-    headers:{Authorization:`Bearer ${gDriveToken}`,'Content-Type':`multipart/related; boundary=${boundary}`},
-    body
-  });
-  if(!res.ok)throw new Error('Drive upload falhou: '+res.status);
-  const data=await res.json();
-  gDriveFileId=data.id;
-  return data;
-}
-async function driveDownload(){
-  const existing=gDriveFileId?{id:gDriveFileId}:await driveFindFile();
-  if(!existing)return null;
-  gDriveFileId=existing.id;
-  const res=await fetch(`https://www.googleapis.com/drive/v3/files/${existing.id}?alt=media`,{
-    headers:{Authorization:`Bearer ${gDriveToken}`}
-  });
-  if(!res.ok)throw new Error('Drive download falhou: '+res.status);
-  return res.text();
+async function rvSyncPush(){
+  if(!rvSyncPass)return;
+  const payload=await encryptJSON(rvSyncPass,rvCollectSyncData());
+  const payloadStr=JSON.stringify(payload);
+  localStorage.setItem('rv_sync_vault',payloadStr);
+  setLocalTs('rv_sync_vault');
+  updateRvSyncStatus('☁ Salvando…');
+  clearTimeout(_rvSyncTimer);
+  _rvSyncTimer=setTimeout(async()=>{
+    const ok=await cloudSet(CLOUD_ROW_REVENDA,payloadStr);
+    updateRvSyncStatus(ok?null:'⚠ Cotações/Pedidos: só local (falha ao sincronizar)');
+  },1200);
 }
 
 /* ════════ UI ════════ */
@@ -1604,6 +1640,7 @@ function rvSalvarCotacao(){
   const lista=rvLoadCotacoes();
   lista.unshift(cotacao);
   rvSaveCotacoes(lista);
+  rvSyncPush();
   alert('Cotação salva! Acesse a aba Cotações.');
 }
 
@@ -1643,10 +1680,12 @@ function rvExcluirCotacao(id){
   if(!confirm('Excluir esta cotação?'))return;
   rvSaveCotacoes(rvLoadCotacoes().filter(c=>c.id!==id));
   rvRenderCotacoes();
+  rvSyncPush();
 }
 function rvLimparTodasCotacoes(){
   if(!confirm('Excluir TODAS as cotações?'))return;
   rvSaveCotacoes([]);rvRenderCotacoes();
+  rvSyncPush();
 }
 
 /* ── CONVERTER EM PEDIDO ── */
@@ -1673,6 +1712,7 @@ function rvConverterEmPedido(cotId){
   const lista=rvLoadPedidos();
   lista.unshift(pedido);
   rvSavePedidos(lista);
+  rvSyncPush();
   rvShowTab('pedidos');
 }
 
@@ -1735,6 +1775,7 @@ function rvToggleStatus(id,key,val){
   p.status[key]=val;
   rvSavePedidos(lista);
   rvRenderPedidos();
+  rvSyncPush();
 }
 function rvUpdateObs(id,val){
   const lista=rvLoadPedidos();
@@ -1742,15 +1783,18 @@ function rvUpdateObs(id,val){
   if(!p)return;
   p.obs=val;
   rvSavePedidos(lista);
+  rvSyncPush();
 }
 function rvExcluirPedido(id){
   if(!confirm('Excluir este pedido?'))return;
   rvSavePedidos(rvLoadPedidos().filter(p=>p.id!==id));
   rvRenderPedidos();
+  rvSyncPush();
 }
 function rvLimparTodosPedidos(){
   if(!confirm('Excluir TODOS os pedidos?'))return;
   rvSavePedidos([]);rvRenderPedidos();
+  rvSyncPush();
 }
 
 /* ── INIT REVENDA ── */
@@ -1767,12 +1811,12 @@ function rvInit(){
     elm.addEventListener('input',rvCalcular);
     elm.addEventListener('change',rvCalcular);
   });
+  updateRvSyncStatus();
 }
 
 addProd({ncm:'4202.92.00'});
 recalc();
 rvInit();
-initGoogleAuth();
 // obs: os dados da Importação ficam cifrados no localStorage; só são carregados
 // quando o usuário desbloqueia a aba com a senha certa (dentro de tryUnlock)
 </script>
