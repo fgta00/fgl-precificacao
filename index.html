@@ -103,7 +103,7 @@ body.dark .insight b{color:#6EE7B7}
 .fill-bar div{height:100%;background:var(--green)}
 small.hint{color:var(--ink4);font-size:.62rem}
 .ovl{position:fixed;inset:0;background:rgba(8,15,25,.55);display:none;align-items:center;justify-content:center;z-index:100;padding:1rem}
-#ovl-lock{background:rgba(8,15,25,.72);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+#ovl-lock,#ovl-auth,#ovl-rvlock{background:rgba(8,15,25,.72);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
 .ovl.open{display:flex}
 .modal{background:var(--card);border-radius:14px;width:560px;max-width:96vw;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
 body.dark .modal{background:#1B2535}
@@ -231,8 +231,9 @@ header .hbtn:hover{border-color:rgba(255,255,255,.45);background:rgba(255,255,25
   <div class="logo"><span class="leaf">🌿</span></div>
   <div><h1>FGL Precificação Unificada</h1><div class="sub">Importação · Revenda</div></div>
   <div class="tabs">
-    <button class="tab" id="tab-import" onclick="showTab('import')">Importação</button>
+    <button class="tab" id="tab-import" onclick="showTab('import')" style="display:none">Importação</button>
     <button class="tab active" id="tab-revenda" onclick="showTab('revenda')">Revenda</button>
+    <a class="tab" id="tab-tracker" href="https://fgta00.github.io/fgl-tracker/" style="display:none;text-decoration:none">📋 Tracker</a>
   </div>
   <div class="spacer"></div>
   <span id="save-status"></span>
@@ -324,9 +325,8 @@ header .hbtn:hover{border-color:rgba(255,255,255,.45);background:rgba(255,255,25
     </div>
 
     <div class="card no-print" style="padding:.6rem .9rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem">
-      <span style="font-size:.66rem;color:var(--ink3);font-weight:600" id="rv-sync-status">☁ Cotações/Pedidos compartilhados: não conectado</span>
+      <span style="font-size:.66rem;color:var(--ink3);font-weight:600" id="rv-sync-status">☁ Cotações/Pedidos compartilhados: bloqueados (abra a aba pra desbloquear)</span>
       <div style="flex:1"></div>
-      <button class="btn btn-s" style="font-size:.64rem;padding:.28rem .6rem" onclick="rvConnectShared()">🔗 Conectar dados compartilhados</button>
       <button class="btn btn-s" style="font-size:.64rem;padding:.28rem .6rem" onclick="rvAddMember()">＋ Adicionar pessoa</button>
     </div>
 
@@ -553,15 +553,17 @@ header .hbtn:hover{border-color:rgba(255,255,255,.45);background:rgba(255,255,25
 </div>
 
 <!-- CONTA — SUPABASE AUTH (e-mail + senha) -->
-<div class="ovl" id="ovl-auth" onclick="if(event.target===this)this.classList.remove('open')">
+<div class="ovl" id="ovl-auth">
   <div class="modal" style="max-width:340px">
     <div class="modal-b" style="text-align:center;padding-top:1.6rem">
       <div style="font-size:2rem;margin-bottom:.4rem">👤</div>
-      <div class="sh" style="justify-content:center;margin-bottom:.3rem">Minha conta</div>
-      <p style="font-size:.74rem;color:var(--ink3);margin-bottom:.9rem">Necessária pra sincronizar Importação e Cotações/Pedidos entre dispositivos e com sua gerente. Não afeta o uso local do app.</p>
+      <div class="sh" style="justify-content:center;margin-bottom:.3rem">Entrar</div>
+      <p style="font-size:.74rem;color:var(--ink3);margin-bottom:.9rem">Acesso restrito. Preencha os 3 campos — a senha do cofre libera automaticamente o que você tiver permissão de ver.</p>
       <input class="mono" id="auth-email" type="email" placeholder="seu@email.com" autocomplete="email"
         style="width:100%;padding:.6rem;border-radius:8px;border:1.5px solid var(--bdr2);text-align:center;font-size:.88rem;background:var(--card);color:var(--ink);margin-bottom:.5rem">
       <input class="mono" id="auth-pw" type="password" placeholder="Senha da conta" autocomplete="current-password"
+        style="width:100%;padding:.6rem;border-radius:8px;border:1.5px solid var(--bdr2);text-align:center;font-size:.88rem;background:var(--card);color:var(--ink);margin-bottom:.5rem">
+      <input class="mono" id="auth-vault-pw" type="password" placeholder="Senha do cofre" autocomplete="off"
         style="width:100%;padding:.6rem;border-radius:8px;border:1.5px solid var(--bdr2);text-align:center;font-size:.88rem;background:var(--card);color:var(--ink)">
       <div id="auth-err" style="color:var(--red);font-size:.7rem;margin-top:.4rem;min-height:1.2em"></div>
       <div style="display:flex;gap:.5rem;margin-top:.6rem">
@@ -586,6 +588,23 @@ header .hbtn:hover{border-color:rgba(255,255,255,.45);background:rgba(255,255,25
       <div id="lock-err" style="color:var(--red);font-size:.72rem;margin-top:.4rem;min-height:1.2em"></div>
       <button class="btn btn-p" style="width:100%;margin-top:.7rem" onclick="tryUnlock()">Entrar</button>
       <p style="font-size:.6rem;color:var(--ink4);margin-top:.7rem">Clique fora desta caixa para voltar à Revenda.</p>
+    </div>
+  </div>
+</div>
+
+<!-- CADEADO — COTAÇÕES/PEDIDOS COMPARTILHADOS (Revenda) -->
+<div class="ovl" id="ovl-rvlock" style="z-index:500" onclick="if(event.target===this)rvShowTab('calc')">
+  <div class="modal" style="max-width:320px">
+    <div class="modal-b" style="text-align:center;padding-top:1.6rem">
+      <div style="font-size:2rem;margin-bottom:.4rem">🔒</div>
+      <div class="sh" style="justify-content:center;margin-bottom:.3rem">Dados compartilhados</div>
+      <p style="font-size:.76rem;color:var(--ink3);margin-bottom:.9rem" id="rvlock-hint">Digite a senha do cofre compartilhado (a mesma da sua gerente).</p>
+      <input class="mono" id="rvlock-pass" type="password" placeholder="Senha do cofre" autocomplete="off"
+        style="width:100%;padding:.65rem;border-radius:8px;border:1.5px solid var(--bdr2);text-align:center;font-size:1rem;background:var(--card);color:var(--ink)"
+        onkeydown="if(event.key==='Enter')tryRvUnlock()">
+      <div id="rvlock-err" style="color:var(--red);font-size:.72rem;margin-top:.4rem;min-height:1.2em"></div>
+      <button class="btn btn-p" style="width:100%;margin-top:.7rem" onclick="tryRvUnlock()">Entrar</button>
+      <p style="font-size:.6rem;color:var(--ink4);margin-top:.7rem">Clique fora pra voltar à Calculadora (sem barreira nenhuma pra usá-la).</p>
     </div>
   </div>
 </div>
@@ -1008,11 +1027,20 @@ function localTs(key){return localStorage.getItem(key+'_ts')||'';}
 function setLocalTs(key){localStorage.setItem(key+'_ts',new Date().toISOString());}
 
 /* ── CONTA (Supabase Auth — e-mail + senha, controla QUEM pode ler/escrever) ── */
+const FRED_EMAIL='fred@animaverde.com.br'; // único e-mail com acesso à Importação e ao Tracker
 let authUser=null;      // {id,email} quando logado
 let _pendingTab=null;   // pra retomar o fluxo (Importação/Revenda) depois do login
 function updateAuthUI(){
   const el=document.getElementById('auth-status');
   if(el)el.textContent=authUser?('🟢 '+authUser.email):'👤 Minha conta';
+  updateHeaderVisibility();
+}
+function updateHeaderVisibility(){
+  const isFred=!!(authUser&&authUser.email&&authUser.email.toLowerCase()===FRED_EMAIL);
+  const tabImport=document.getElementById('tab-import');
+  const tabTracker=document.getElementById('tab-tracker');
+  if(tabImport)tabImport.style.display=isFred?'':'none';
+  if(tabTracker)tabTracker.style.display=isFred?'':'none';
 }
 async function initAuth(){
   if(!_supaOK)return;
@@ -1030,9 +1058,57 @@ function openAuthModal(){
   setTimeout(()=>{const el=document.getElementById('auth-email');if(el)el.focus();},50);
 }
 function onAuthButtonClick(){authUser?authSignOut():openAuthModal();}
+
+/* Tenta liberar os vaults que a conta tiver permissão, usando a senha do
+   cofre digitada junto no login — falha silenciosa em qualquer um deles
+   não é erro (a pessoa pode não ter permissão, ou a senha ser diferente
+   por vault; nesses casos os cadeados de cada aba continuam funcionando
+   normalmente como plano B). */
+async function attemptAutoUnlock(vaultPass){
+  if(!vaultPass||!authUser)return;
+  if(authUser.email&&authUser.email.toLowerCase()===FRED_EMAIL){
+    try{
+      const localRaw=localStorage.getItem(SAVE_KEY);
+      const cloud=await importCloudGet();
+      let vaultToUse=null,fromCloud=false;
+      if(cloud&&cloud.blob){
+        _importRevision=cloud.revision||1;
+        if(!localRaw){vaultToUse=cloud.blob;fromCloud=true;}
+        else{const cloudTs=cloud.updated_at||'';fromCloud=cloudTs>=localTs(SAVE_KEY);vaultToUse=fromCloud?cloud.blob:localRaw;}
+      }else if(localRaw){vaultToUse=localRaw;_importRevision=0;}
+      if(vaultToUse){
+        const payload=JSON.parse(vaultToUse);
+        const state=await decryptJSON(vaultPass,payload);
+        importPass=vaultPass;
+        applyState(state);recalc();
+        if(fromCloud){localStorage.setItem(SAVE_KEY,vaultToUse);setLocalTs(SAVE_KEY);}
+        else if(_supaOK){await importCloudSave(vaultToUse);}
+      }else{
+        importPass=vaultPass;_importRevision=0; // 1º uso — essa senha vira a senha do cofre
+      }
+    }catch(e){/* senha não bate pro cofre de Importação — sem problema, cadeado da aba cobre depois */}
+  }
+  try{
+    const cloud=await rvCloudGet(); // RLS já filtra: só volta algo se for membro
+    if(cloud&&cloud.blob){
+      const localRaw=localStorage.getItem('rv_sync_vault');
+      const localTsV=localTs('rv_sync_vault');
+      let vaultToUse=cloud.blob,fromCloud=true;
+      if(localRaw&&localTsV>(cloud.updated_at||'')){vaultToUse=localRaw;fromCloud=false;}
+      const payload=JSON.parse(vaultToUse);
+      const data=await decryptJSON(vaultPass,payload);
+      rvSyncPass=vaultPass;_rvRevision=cloud.revision||1;
+      rvApplySyncData(data);
+      if(fromCloud){localStorage.setItem('rv_sync_vault',vaultToUse);setLocalTs('rv_sync_vault');}
+      else{await rvCloudSave(vaultToUse);}
+      updateRvSyncStatus();
+    }
+  }catch(e){/* senha não bate pro cofre compartilhado, ou ainda não é membro — sem problema */}
+}
 async function authSignIn(){
   const email=document.getElementById('auth-email').value.trim();
   const pw=document.getElementById('auth-pw').value;
+  const vaultPw=document.getElementById('auth-vault-pw').value;
   if(!email||!pw){document.getElementById('auth-err').textContent='Preencha e-mail e senha.';return;}
   document.getElementById('auth-err').style.color='';
   document.getElementById('auth-err').textContent='Entrando…';
@@ -1042,11 +1118,14 @@ async function authSignIn(){
   updateAuthUI();
   document.getElementById('ovl-auth').classList.remove('open');
   toastSave('Conectado ✓');
+  await attemptAutoUnlock(vaultPw);
+  document.getElementById('auth-vault-pw').value='';
   _resumePending();
 }
 async function authSignUp(){
   const email=document.getElementById('auth-email').value.trim();
   const pw=document.getElementById('auth-pw').value;
+  const vaultPw=document.getElementById('auth-vault-pw').value;
   if(!email||!pw){document.getElementById('auth-err').textContent='Preencha e-mail e senha.';return;}
   if(pw.length<6){document.getElementById('auth-err').textContent='Senha muito curta (mín. 6 caracteres).';return;}
   document.getElementById('auth-err').style.color='';
@@ -1058,6 +1137,8 @@ async function authSignUp(){
     updateAuthUI();
     document.getElementById('ovl-auth').classList.remove('open');
     toastSave('Conta criada e conectada ✓');
+    await attemptAutoUnlock(vaultPw);
+    document.getElementById('auth-vault-pw').value='';
     _resumePending();
   }else{
     document.getElementById('auth-err').textContent='Conta criada — confirme o e-mail (verifique a caixa de entrada) e entre de novo.';
@@ -1073,7 +1154,7 @@ async function authSignOut(){
 function _resumePending(){
   const p=_pendingTab;_pendingTab=null;
   if(p==='import')checkLock();
-  else if(p==='revenda-connect')rvConnectShared();
+  else if(p==='revenda-connect')checkRvLock();
 }
 
 /* ════════ IMPORTAÇÃO: vault pessoal (Auth + revisão, sem sobrescrita silenciosa) ════════ */
@@ -1253,7 +1334,7 @@ function updateRvSyncStatus(msg){
   if(!el)return;
   if(msg){el.textContent=msg;return;}
   if(!authUser){el.textContent='☁ Cotações/Pedidos compartilhados: entre com sua conta primeiro';return;}
-  el.textContent=rvSyncPass?'☁ Cotações/Pedidos compartilhados: conectado ✓ (sincroniza sozinho)':'☁ Cotações/Pedidos compartilhados: não conectado';
+  el.textContent=rvSyncPass?'☁ Cotações/Pedidos compartilhados: conectado ✓ (sincroniza sozinho)':'☁ Cotações/Pedidos compartilhados: bloqueados (abra a aba pra desbloquear)';
 }
 async function rvCloudGet(){
   if(!_supaOK||!authUser)return null;
@@ -1275,11 +1356,23 @@ async function rvCloudSave(blobStr){
     _rvRevision=nextRev;return{ok:true};
   }catch(e){console.warn(e);return{ok:false,reason:'error'};}
 }
-async function rvConnectShared(){
-  if(!authUser){_pendingTab='revenda-connect';openAuthModal();return;}
-  const pw=prompt('Senha do cofre compartilhado de Cotações/Pedidos\n(a mesma que sua gerente vai digitar — pode ser diferente da senha da sua conta)');
-  if(!pw)return;
-  updateRvSyncStatus('☁ Conectando…');
+function checkRvLock(){
+  if(!authUser){
+    document.getElementById('ovl-rvlock').classList.remove('open');
+    _pendingTab='revenda-connect';
+    openAuthModal();
+    return;
+  }
+  if(rvSyncPass){document.getElementById('ovl-rvlock').classList.remove('open');return;}
+  document.getElementById('rvlock-hint').textContent='Conta conectada. Digite a senha do cofre compartilhado (a mesma da sua gerente).';
+  document.getElementById('ovl-rvlock').classList.add('open');
+  setTimeout(()=>{const el=document.getElementById('rvlock-pass');if(el)el.focus();},50);
+}
+async function tryRvUnlock(){
+  const pw=document.getElementById('rvlock-pass').value;
+  if(!pw){document.getElementById('rvlock-err').textContent='Digite uma senha.';return;}
+  document.getElementById('rvlock-err').style.color='';
+  document.getElementById('rvlock-err').textContent='Conectando à nuvem…';
   try{
     const cloud=await rvCloudGet();
     if(!cloud){
@@ -1287,10 +1380,16 @@ async function rvConnectShared(){
       const payload=await encryptJSON(pw,rvCollectSyncData());
       const payloadStr=JSON.stringify(payload);
       const{error}=await _supa.rpc('pv_create_shared',{p_id:SHARED_VAULT_ID,p_blob:payloadStr});
-      if(error){updateRvSyncStatus();alert('Erro ao criar vault compartilhado: '+error.message);return;}
+      if(error){
+        document.getElementById('rvlock-err').style.color='var(--red)';
+        document.getElementById('rvlock-err').textContent='Erro: '+error.message;
+        return;
+      }
       rvSyncPass=pw;_rvRevision=1;
       localStorage.setItem('rv_sync_vault',payloadStr);setLocalTs('rv_sync_vault');
-      updateRvSyncStatus();toastSave('Vault compartilhado criado ✓ — use "＋ Adicionar pessoa" pra convidar');
+      updateRvSyncStatus();
+      rvUnlockUI();
+      toastSave('Vault compartilhado criado ✓ — use "＋ Adicionar pessoa" pra convidar');
       return;
     }
     const localRaw=localStorage.getItem('rv_sync_vault');
@@ -1304,12 +1403,21 @@ async function rvConnectShared(){
     if(fromCloud){localStorage.setItem('rv_sync_vault',vaultToUse);setLocalTs('rv_sync_vault');}
     else{await rvCloudSave(vaultToUse);}
     updateRvSyncStatus();
+    rvUnlockUI();
     toastSave('Dados compartilhados conectados ✓');
   }catch(e){
     console.warn(e);
-    updateRvSyncStatus();
-    alert('Não deu pra conectar — ou a senha do cofre está errada, ou você ainda não foi adicionado(a) como membro (peça pra quem criou o vault te adicionar pelo seu e-mail, em "＋ Adicionar pessoa").');
+    document.getElementById('rvlock-err').style.color='var(--red)';
+    document.getElementById('rvlock-err').textContent='Senha incorreta (ou você ainda não foi adicionado(a) como membro).';
+    document.getElementById('rvlock-pass').value='';
+    document.getElementById('rvlock-pass').focus();
   }
+}
+function rvUnlockUI(){
+  document.getElementById('ovl-rvlock').classList.remove('open');
+  document.getElementById('rvlock-err').textContent='';
+  document.getElementById('rvlock-pass').value='';
+  rvRenderCotacoes();rvRenderPedidos();
 }
 async function rvSyncPush(){
   if(!rvSyncPass||!authUser)return;
@@ -1726,8 +1834,12 @@ function rvShowTab(id){
   document.querySelectorAll('.rv-tab').forEach(b=>b.classList.remove('active'));
   rvEl('rvpane-'+id).classList.add('active');
   rvEl('rvtab-'+id).classList.add('active');
-  if(id==='cotacoes')rvRenderCotacoes();
-  if(id==='pedidos')rvRenderPedidos();
+  if(id==='cotacoes'||id==='pedidos'){
+    checkRvLock();
+    if(rvSyncPass){id==='cotacoes'?rvRenderCotacoes():rvRenderPedidos();}
+  }else{
+    document.getElementById('ovl-rvlock').classList.remove('open');
+  }
 }
 
 /* ── STORAGE ── */
@@ -1936,7 +2048,10 @@ function rvInit(){
 addProd({ncm:'4202.92.00'});
 recalc();
 rvInit();
-initAuth().then(()=>updateRvSyncStatus());
+initAuth().then(()=>{
+  updateRvSyncStatus();
+  if(!authUser)openAuthModal(); // gate obrigatório logo na abertura da página
+});
 // obs: os dados da Importação ficam cifrados no localStorage; só são carregados
 // quando o usuário desbloqueia a aba com a senha certa (dentro de tryUnlock)
 </script>
